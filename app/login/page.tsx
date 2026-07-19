@@ -34,7 +34,7 @@ export default function LoginPage() {
     <div className="container">
       <div className="login-wrap">
         <div className="login-brand">
-          <div className="nav-mark">MC</div>
+          <img src="/logo-icon.png" alt="MRL Cybertec" style={{ width: 48, height: 48, objectFit: "contain", margin: "0 auto 10px" }} />
           <h1>MRL Cybertec</h1>
           <p>Service Ticketing Dashboard</p>
         </div>

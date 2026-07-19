@@ -65,6 +65,9 @@ export interface Machine {
   contract_type: ContractType;
   contract_validity: string | null;
   install_date: string | null;
+  active?: boolean;
+  retired_at?: string | null;
+  retired_reason?: string | null;
 }
 
 export interface Ticket {
@@ -133,4 +136,63 @@ export const STATUS_DOT: Record<TicketStatus, string> = {
 };
 
 export const REGIONS: Region[] = ["NCR", "North", "South", "Cebu", "Davao", "NSC"];
+
+export interface KnowledgeBaseEntry {
+  resolution_id: string;
+  ticket_id: string;
+  ticket_number: string;
+  brand: string;
+  machine_model: string;
+  serial_number: string;
+  symptom_category: "hardware" | "software";
+  resolution_type: ResolutionType;
+  error_code: string | null;
+  root_cause: string;
+  resolution_notes: string;
+  parts_used: string[] | null;
+  resolved_at: string | null;
+}
+
+export type PmContractStatus = "active" | "terminated" | "completed";
+
+export interface PmContract {
+  id: string;
+  machine_id: string;
+  focus: string;
+  interval_months: number;
+  start_date: string;
+  total_visits: number;
+  end_date: string;
+  status: PmContractStatus;
+  terminated_at: string | null;
+  terminated_by: string | null;
+  termination_reason: string | null;
+  notes: string | null;
+  created_at: string;
+  machines?: Machine;
+}
+
+export type PmVisitStatus = "upcoming" | "notified_week" | "notified_daily" | "completed" | "overdue" | "cancelled";
+
+export const PM_VISIT_STATUS_LABELS: Record<PmVisitStatus, string> = {
+  upcoming: "Upcoming",
+  notified_week: "Due this week",
+  notified_daily: "Due soon",
+  completed: "Completed",
+  overdue: "Overdue",
+  cancelled: "Cancelled",
+};
+
+export interface PmSchedule {
+  id: string;
+  machine_id: string;
+  pm_contract_id: string | null;
+  scheduled_date: string;
+  status: PmVisitStatus;
+  last_notified_at: string | null;
+  notes: string | null;
+  created_at: string;
+  machines?: Machine;
+  pm_contracts?: Pick<PmContract, "focus" | "status">;
+}
 

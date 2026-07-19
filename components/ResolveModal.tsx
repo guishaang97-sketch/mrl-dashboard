@@ -6,10 +6,12 @@ import { ResolutionType, RESOLUTION_TYPE_LABELS } from "@/lib/types";
 
 export default function ResolveModal({
   ticketId,
+  technicianId,
   onClose,
   onResolved,
 }: {
   ticketId: string;
+  technicianId: string | undefined;
   onClose: () => void;
   onResolved: () => void;
 }) {
@@ -62,6 +64,14 @@ export default function ResolveModal({
       setError(ticketError.message);
       return;
     }
+
+    const { error: eventError } = await supabase.from("ticket_events").insert({
+      ticket_id: ticketId,
+      actor: technicianId,
+      event_type: "status_change",
+      detail: `Resolved — ${RESOLUTION_TYPE_LABELS[resolutionType]}`,
+    });
+    if (eventError) console.error("Failed to log resolve event:", eventError);
 
     onResolved();
   }

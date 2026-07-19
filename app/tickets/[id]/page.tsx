@@ -28,6 +28,7 @@ function DetailContent() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [showResolveModal, setShowResolveModal] = useState(false);
+  const [generatingReport, setGeneratingReport] = useState(false);
 
   const isAssignedToMe = !!technician && ticket?.assigned_to === technician.id;
   const isOnTeam = !!technician && teamMembers.some((m) => m.technician_id === technician.id);
@@ -131,14 +132,42 @@ function DetailContent() {
 
   async function handleReopen() {
     setBusy(true);
+
+    // Clear the previous resolution record so the ticket can be resolved
+    // again — resolutions is one-per-ticket, and the resolve UI hides
+    // itself when a resolution already exists.
+    const { error: deleteError } = await supabase.from("resolutions").delete().eq("ticket_id", ticketId);
+    if (deleteError) console.error("Failed to clear old resolution on reopen:", deleteError);
+
     const nextStatus = ticket?.assigned_to ? "in_progress" : "unclaimed";
     const { error } = await supabase
       .from("tickets")
-      .update({ status: nextStatus, last_activity_label: "Reopened" })
+      .update({
+        status: nextStatus,
+        last_activity_label: "Reopened",
+        escalation_notified_at: null,
+        closure_email_sent_at: null,
+      })
       .eq("id", ticketId);
     if (!error) await logEvent("status_change", "Reopened");
     setBusy(false);
     load();
+  }
+
+  async function handleDownloadReport() {
+    if (!resolution || !ticket) return;
+    setGeneratingReport(true);
+    try {
+      const { generateServiceReport, downloadPdf } = await import("@/lib/generateServiceReport");
+      const teamNames = teamMembers.map((m) => m.technicians.name);
+      const bytes = await generateServiceReport(ticket, resolution, teamNames);
+      downloadPdf(bytes, `${ticket.ticket_number}-service-report.pdf`);
+    } catch (err) {
+      console.error(err);
+      setMsg("Could not generate the report.");
+    } finally {
+      setGeneratingReport(false);
+    }
   }
 
   if (loading) {
@@ -321,6 +350,14 @@ function DetailContent() {
             />
           )}
 
+          {resolution && (
+            <div className="card" style={{ marginBottom: 14 }}>
+              <button className="btn secondary block" onClick={handleDownloadReport} disabled={generatingReport}>
+                {generatingReport ? "Generating…" : "Download service report (PDF)"}
+              </button>
+            </div>
+          )}
+
           {canManage && (ticket.status === "claimed" || ticket.status === "in_progress") && (
             <div className="card" style={{ marginBottom: 14 }}>
               {ticket.status === "claimed" && (
@@ -328,7 +365,12 @@ function DetailContent() {
                   Start work
                 </button>
               )}
-              <StatusUpdateForm ticketId={ticketId} currentCode={ticket.status_code} onUpdated={load} />
+              <StatusUpdateForm
+                ticketId={ticketId}
+                currentCode={ticket.status_code}
+                technicianId={technician?.id}
+                onUpdated={load}
+              />
             </div>
           )}
 
@@ -361,6 +403,7 @@ function DetailContent() {
       {showResolveModal && (
         <ResolveModal
           ticketId={ticketId}
+          technicianId={technician?.id}
           onClose={() => setShowResolveModal(false)}
           onResolved={() => {
             setShowResolveModal(false);

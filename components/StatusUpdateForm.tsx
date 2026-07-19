@@ -7,10 +7,12 @@ import { StatusCode, STATUS_CODE_LABELS } from "@/lib/types";
 export default function StatusUpdateForm({
   ticketId,
   currentCode,
+  technicianId,
   onUpdated,
 }: {
   ticketId: string;
   currentCode: StatusCode;
+  technicianId: string | undefined;
   onUpdated: () => void;
 }) {
   const [code, setCode] = useState<StatusCode>(currentCode);
@@ -32,11 +34,13 @@ export default function StatusUpdateForm({
       .eq("id", ticketId);
 
     if (!error) {
-      await supabase.from("ticket_events").insert({
+      const { error: eventError } = await supabase.from("ticket_events").insert({
         ticket_id: ticketId,
+        actor: technicianId,
         event_type: "status_code_change",
         detail: label,
       });
+      if (eventError) console.error("Failed to log status update event:", eventError);
     }
 
     setSubmitting(false);

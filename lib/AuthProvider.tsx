@@ -10,6 +10,7 @@ interface AuthContextValue {
   technician: Technician | null;
   loading: boolean;
   signOut: () => Promise<void>;
+  refreshTechnician: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue>({
@@ -17,6 +18,7 @@ const AuthContext = createContext<AuthContextValue>({
   technician: null,
   loading: true,
   signOut: async () => {},
+  refreshTechnician: async () => {},
 });
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -62,8 +64,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setTechnician(null);
   }
 
+  async function refreshTechnician() {
+    if (session) await loadTechnician(session.user.id);
+  }
+
   return (
-    <AuthContext.Provider value={{ session, technician, loading, signOut }}>{children}</AuthContext.Provider>
+    <AuthContext.Provider value={{ session, technician, loading, signOut, refreshTechnician }}>
+      {children}
+    </AuthContext.Provider>
   );
 }
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
 import { useAuth } from "@/lib/AuthProvider";
@@ -10,10 +10,6 @@ import PriorityDot from "@/components/PriorityDot";
 import { Ticket, REGIONS } from "@/lib/types";
 
 type Tab = "open" | "closed";
-
-function isoDate(d: Date) {
-  return d.toISOString().slice(0, 10);
-}
 
 function timeAgo(iso: string) {
   const diffMs = Date.now() - new Date(iso).getTime();
@@ -33,26 +29,15 @@ function BoardContent() {
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<Tab>("open");
-  // Date range for the Closed tab. Filtered against last_activity_at rather
-  // than closed_at, since a resolved-but-not-yet-closed ticket has no
-  // closed_at yet but still belongs in this tab.
-  const [fromDate, setFromDate] = useState<string>(isoDate(new Date(Date.now() - 30 * 86400000)));
-  const [toDate, setToDate] = useState<string>("");
+  // Closed tab is search-gated, same idea as the knowledge base: don't
+  // auto-load everything, wait for a search or an explicit "browse" click.
+  const [hasSearchedClosed, setHasSearchedClosed] = useState(false);
   const [regionFilter, setRegionFilter] = useState<string>("all");
   const [regionInitialized, setRegionInitialized] = useState(false);
   const [search, setSearch] = useState("");
   const [claimingId, setClaimingId] = useState<string | null>(null);
   const [msg, setMsg] = useState("");
-
-  function applyPreset(days: number | null) {
-    if (days === null) {
-      setFromDate("");
-      setToDate("");
-      return;
-    }
-    setFromDate(isoDate(new Date(Date.now() - days * 86400000)));
-    setToDate("");
-  }
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Default the region filter to the technician's configured default_region,
   // once, after their profile loads. They can still change it manually.
@@ -69,14 +54,12 @@ function BoardContent() {
       .from("tickets")
       .select("*, machines(*), technicians!tickets_assigned_to_fkey(*), ticket_assignees(technician_id, technicians(id, name))")
       .order("last_activity_at", { ascending: false })
-      .limit(300);
+      .limit(tab === "open" ? 300 : 200);
 
     if (tab === "open") {
       query = query.in("status", ["unclaimed", "claimed", "in_progress"]);
     } else {
       query = query.in("status", ["resolved", "closed"]);
-      if (fromDate) query = query.gte("last_activity_at", `${fromDate}T00:00:00`);
-      if (toDate) query = query.lte("last_activity_at", `${toDate}T23:59:59`);
     }
     if (regionFilter !== "all") query = query.eq("region", regionFilter);
 
@@ -89,18 +72,98 @@ function BoardContent() {
     }
     setTickets((data as unknown as Ticket[]) || []);
     setLoading(false);
-  }, [tab, fromDate, toDate, regionFilter]);
+  }, [tab, regionFilter]);
+
+  // Open tab: load automatically, same as always. Closed tab: only once
+  // the user has actually searched or clicked "browse" — see below.
+  useEffect(() => {
+    if (tab === "open") {
+      fetchTickets();
+    } else if (tab === "closed" && hasSearchedClosed) {
+      fetchTickets();
+    } else {
+      setLoading(false);
+    }
+  }, [tab, regionFilter, hasSearchedClosed, fetchTickets]);
+
+  // Leaving the Closed tab resets its gate — next visit starts fresh
+  // rather than silently holding onto a possibly-stale list.
+  function switchTab(next: Tab) {
+    if (tab === "closed" && next !== "closed") {
+      setHasSearchedClosed(false);
+      setTickets([]);
+    }
+    setSearch("");
+    setTab(next);
+  }
+
+  function handleClosedSearchInput(q: string) {
+    setSearch(q);
+    if (searchTimer.current) clearTimeout(searchTimer.current);
+    if (q.trim().length < 4) return;
+    searchTimer.current = setTimeout(() => setHasSearchedClosed(true), 300);
+  }
+
+  // Whether a single ticket belongs in the currently-viewed tab/filters —
+  // used so a realtime update can decide "add/update this row" vs "it
+  // moved out of view, remove it" without re-querying the whole board.
+  const belongsInCurrentView = useCallback(
+    (t: Ticket) => {
+      const openStatuses = ["unclaimed", "claimed", "in_progress"];
+      const closedStatuses = ["resolved", "closed"];
+      if (tab === "open" && !openStatuses.includes(t.status)) return false;
+      if (tab === "closed" && (!hasSearchedClosed || !closedStatuses.includes(t.status))) return false;
+      if (regionFilter !== "all" && t.region !== regionFilter) return false;
+      return true;
+    },
+    [tab, hasSearchedClosed, regionFilter],
+  );
+
+  // Realtime handler: instead of re-running the full board query on every
+  // change (expensive — every open tab re-downloads the entire list),
+  // fetch just the ONE changed ticket and merge it into local state. Much
+  // smaller payload per event, and scales with number of changes rather
+  // than (changes × open tabs × full list size).
+  const applyRealtimeChange = useCallback(
+    async (payload: { eventType: string; new: { id?: string }; old: { id?: string } }) => {
+      if (payload.eventType === "DELETE") {
+        const deletedId = payload.old?.id;
+        if (deletedId) setTickets((prev) => prev.filter((t) => t.id !== deletedId));
+        return;
+      }
+
+      const id = payload.new?.id;
+      if (!id) return;
+
+      const { data, error } = await supabase
+        .from("tickets")
+        .select("*, machines(*), technicians!tickets_assigned_to_fkey(*), ticket_assignees(technician_id, technicians(id, name))")
+        .eq("id", id)
+        .maybeSingle();
+
+      if (error || !data) return;
+      const updated = data as unknown as Ticket;
+
+      setTickets((prev) => {
+        const withoutThis = prev.filter((t) => t.id !== updated.id);
+        const next = belongsInCurrentView(updated) ? [updated, ...withoutThis] : withoutThis;
+        return next.sort((a, b) => (a.last_activity_at < b.last_activity_at ? 1 : -1));
+      });
+    },
+    [belongsInCurrentView],
+  );
 
   useEffect(() => {
-    fetchTickets();
     const channel = supabase
       .channel("tickets-board")
-      .on("postgres_changes", { event: "*", schema: "public", table: "tickets" }, () => fetchTickets())
+      .on("postgres_changes", { event: "*", schema: "public", table: "tickets" }, (payload) =>
+        applyRealtimeChange(payload as never),
+      )
       .subscribe();
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [fetchTickets]);
+  }, [applyRealtimeChange]);
 
   async function handleClaim(ticketId: string) {
     setClaimingId(ticketId);
@@ -147,14 +210,16 @@ function BoardContent() {
     <div className="container">
       <div className="board-header">
         <h1>Tickets</h1>
-        <span className="board-count">{loading ? "Loading…" : `${filtered.length} shown`}</span>
+        {(tab === "open" || hasSearchedClosed) && (
+          <span className="board-count">{loading ? "Loading…" : `${filtered.length} shown`}</span>
+        )}
       </div>
 
       <div className="tabs">
-        <button className={`tab ${tab === "open" ? "active" : ""}`} onClick={() => setTab("open")}>
+        <button className={`tab ${tab === "open" ? "active" : ""}`} onClick={() => switchTab("open")}>
           Open
         </button>
-        <button className={`tab ${tab === "closed" ? "active" : ""}`} onClick={() => setTab("closed")}>
+        <button className={`tab ${tab === "closed" ? "active" : ""}`} onClick={() => switchTab("closed")}>
           Closed
         </button>
       </div>
@@ -168,95 +233,92 @@ function BoardContent() {
             </option>
           ))}
         </select>
-        {tab === "closed" && (
-          <>
-            <button className="btn small secondary" type="button" onClick={() => applyPreset(30)}>
-              30 days
-            </button>
-            <button className="btn small secondary" type="button" onClick={() => applyPreset(182)}>
-              6 months
-            </button>
-            <button className="btn small secondary" type="button" onClick={() => applyPreset(365)}>
-              1 year
-            </button>
-            <button className="btn small secondary" type="button" onClick={() => applyPreset(null)}>
-              All
-            </button>
-            <input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} aria-label="From date" />
-            <input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} aria-label="To date" />
-          </>
-        )}
         <input
           type="text"
-          placeholder="Search ticket #, customer, serial, model…"
+          placeholder={
+            tab === "closed"
+              ? "Search ticket #, customer, serial, model… (4+ letters)"
+              : "Search ticket #, customer, serial, model…"
+          }
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          onChange={(e) => (tab === "closed" ? handleClosedSearchInput(e.target.value) : setSearch(e.target.value))}
         />
+        {tab === "closed" && !hasSearchedClosed && (
+          <button className="btn secondary" onClick={() => setHasSearchedClosed(true)}>
+            Browse recent closed/resolved
+          </button>
+        )}
       </div>
 
       {msg && <div className="msg error" style={{ marginBottom: 14 }}>{msg}</div>}
 
-      {!loading && filtered.length === 0 && <div className="empty-state">No tickets match these filters.</div>}
+      {tab === "closed" && !hasSearchedClosed && (
+        <div className="empty-state">Search for something specific, or click "Browse recent closed/resolved" to see the latest 200.</div>
+      )}
+      {(tab === "open" || hasSearchedClosed) && !loading && filtered.length === 0 && (
+        <div className="empty-state">No tickets match these filters.</div>
+      )}
 
       <div className="board-grid">
-        {filtered.map((t) => {
-          const teamNames = (t.ticket_assignees || []).map((a) => a.technicians.name);
-          const isMine =
-            !!technician &&
-            (t.assigned_to === technician.id || (t.ticket_assignees || []).some((a) => a.technician_id === technician.id));
-          return (
-            <Link href={`/tickets/${t.id}`} key={t.id} className="ticket-card">
-              <div className="tc-top">
-                <div className="tc-id">
-                  <PriorityDot status={t.status} />
-                  <span className="ticket-number">{t.ticket_number}</span>
-                  {isMine && tab === "open" && (
-                    <span title="Assigned to you" aria-label="Assigned to you">
-                      📌
-                    </span>
+        {(tab === "open" || hasSearchedClosed) &&
+          filtered.map((t) => {
+            const teamNames = (t.ticket_assignees || []).map((a) => a.technicians.name);
+            const isMine =
+              !!technician &&
+              (t.assigned_to === technician.id || (t.ticket_assignees || []).some((a) => a.technician_id === technician.id));
+            return (
+              <Link href={`/tickets/${t.id}`} key={t.id} className="ticket-card">
+                <div className="tc-top">
+                  <div className="tc-id">
+                    <PriorityDot status={t.status} />
+                    <span className="ticket-number">{t.ticket_number}</span>
+                    {isMine && tab === "open" && (
+                      <span title="Assigned to you" aria-label="Assigned to you">
+                        📌
+                      </span>
+                    )}
+                  </div>
+                  <StatusBadge status={t.status} />
+                </div>
+
+                <div>
+                  <div className="tc-title">
+                    {t.machines?.customer_name} — {t.machines?.brand} {t.machines?.machine_model}
+                  </div>
+                  <div className="tc-sub">
+                    SN {t.machines?.serial_number}
+                    {t.technicians?.name ? ` · ${t.technicians.name}` : ""}
+                    {teamNames.length > 0 ? ` +${teamNames.length}` : ""}
+                  </div>
+                </div>
+
+                <div className="tc-meta">
+                  <div>
+                    Lodged: <b>{new Date(t.created_at).toLocaleString()}</b>
+                  </div>
+                  <div>
+                    Last update: <b>{t.last_activity_label}</b> · {timeAgo(t.last_activity_at)}
+                  </div>
+                </div>
+
+                <div className="tc-bottom">
+                  <span className="ticket-region">{t.region}</span>
+                  {t.status === "unclaimed" && !isViewer && (
+                    <button
+                      className="btn small"
+                      disabled={claimingId === t.id}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        handleClaim(t.id);
+                      }}
+                    >
+                      {claimingId === t.id ? "Claiming…" : "Claim"}
+                    </button>
                   )}
                 </div>
-                <StatusBadge status={t.status} />
-              </div>
-
-              <div>
-                <div className="tc-title">
-                  {t.machines?.customer_name} — {t.machines?.brand} {t.machines?.machine_model}
-                </div>
-                <div className="tc-sub">
-                  SN {t.machines?.serial_number}
-                  {t.technicians?.name ? ` · ${t.technicians.name}` : ""}
-                  {teamNames.length > 0 ? ` +${teamNames.length}` : ""}
-                </div>
-              </div>
-
-              <div className="tc-meta">
-                <div>
-                  Lodged: <b>{new Date(t.created_at).toLocaleString()}</b>
-                </div>
-                <div>
-                  Last update: <b>{t.last_activity_label}</b> · {timeAgo(t.last_activity_at)}
-                </div>
-              </div>
-
-              <div className="tc-bottom">
-                <span className="ticket-region">{t.region}</span>
-                {t.status === "unclaimed" && !isViewer && (
-                  <button
-                    className="btn small"
-                    disabled={claimingId === t.id}
-                    onClick={(e) => {
-                      e.preventDefault();
-                      handleClaim(t.id);
-                    }}
-                  >
-                    {claimingId === t.id ? "Claiming…" : "Claim"}
-                  </button>
-                )}
-              </div>
-            </Link>
-          );
-        })}
+              </Link>
+            );
+          })}
       </div>
     </div>
   );
