@@ -1,0 +1,792 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MRL Cybertec — Machine Label Generator</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<style>
+  :root {
+    --ink: #1a2332;
+    --ink-soft: #5a6472;
+    --line: #d8dce2;
+    --accent: #1f6f5c;
+    --bg: #f7f8fa;
+    --card: #ffffff;
+    --danger: #b3423f;
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --mono: "SF Mono", Consolas, "Roboto Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: var(--font);
+    background: var(--bg);
+    color: var(--ink);
+  }
+  header {
+    padding: 20px 28px;
+    border-bottom: 1px solid var(--line);
+    background: var(--card);
+    position: relative;
+  }
+  header h1 { font-size: 17px; margin: 0 0 2px; letter-spacing: 0.2px; }
+  header p { margin: 0; font-size: 13px; color: var(--ink-soft); }
+
+  .layout {
+    display: grid;
+    grid-template-columns: 380px 1fr;
+    gap: 0;
+    min-height: calc(100vh - 73px);
+  }
+  @media (max-width: 820px) {
+    .layout { grid-template-columns: 1fr; }
+  }
+
+  .panel {
+    padding: 24px 28px;
+    border-right: 1px solid var(--line);
+    background: var(--card);
+    overflow-y: auto;
+  }
+
+  /* --- recall / search --------------------------------------------------- */
+  .search-wrap { position: relative; margin-bottom: 20px; }
+  .search-wrap input {
+    width: 100%;
+    padding: 9px 10px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    font-size: 13px;
+    font-family: var(--font);
+  }
+  .search-wrap input:focus { outline: none; border-color: var(--accent); }
+  .search-label { font-size: 12px; font-weight: 600; color: var(--ink-soft); margin-bottom: 5px; display: block; text-transform: uppercase; letter-spacing: 0.4px; }
+  .search-results {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0; right: 0;
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    box-shadow: 0 6px 20px rgba(20,25,35,0.10);
+    max-height: 280px;
+    overflow-y: auto;
+    z-index: 20;
+    display: none;
+  }
+  .search-results.open { display: block; }
+  .search-result {
+    padding: 9px 12px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--line);
+  }
+  .search-result:last-child { border-bottom: none; }
+  .search-result:hover { background: var(--bg); }
+  .search-result .sr-name { font-size: 13px; font-weight: 600; }
+  .search-result .sr-meta { font-size: 11.5px; color: var(--ink-soft); margin-top: 1px; }
+  .search-empty { padding: 12px; font-size: 12.5px; color: var(--ink-soft); }
+  .divider { border: none; border-top: 1px solid var(--line); margin: 4px 0 20px; }
+
+  .field { margin-bottom: 14px; }
+  .field label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--ink-soft);
+    margin-bottom: 5px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+  }
+  .field label .optional { text-transform: none; font-weight: 400; letter-spacing: 0; color: #93a0ad; }
+  .field input, .field select {
+    width: 100%;
+    padding: 9px 10px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    font-size: 14px;
+    font-family: var(--font);
+    background: #fff;
+    color: var(--ink);
+  }
+  .field input:focus, .field select:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+  button.primary {
+    width: 100%;
+    padding: 11px;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    margin-top: 4px;
+  }
+  button.primary:disabled { opacity: 0.5; cursor: default; }
+  button.secondary {
+    width: 100%;
+    padding: 10px;
+    background: #fff;
+    color: var(--ink);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    margin-top: 8px;
+  }
+
+  .msg { font-size: 13px; margin-top: 10px; padding: 8px 10px; border-radius: 6px; display: none; }
+  .msg.error { display: block; background: #fbeceb; color: var(--danger); }
+  .msg.success { display: block; background: #eaf4f1; color: var(--accent); }
+
+  .config-toggle { font-size: 12px; color: var(--ink-soft); cursor: pointer; margin-top: 18px; text-decoration: underline; }
+  .config-box { display: none; margin-top: 10px; padding: 12px; background: var(--bg); border-radius: 6px; }
+  .config-box.open { display: block; }
+
+  .stage {
+    padding: 32px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .stage-empty { color: var(--ink-soft); font-size: 14px; margin-top: 80px; text-align: center; max-width: 320px; }
+
+  /* the printable label itself */
+  .label {
+    width: 300px;
+    background: #fff;
+    border: 1.5px solid var(--ink);
+    border-radius: 4px;
+    padding: 14px;
+    display: none;
+  }
+  .label.visible { display: block; }
+  .label-header {
+    font-size: 8.5px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    color: var(--accent);
+    border-bottom: 1.5px solid var(--ink);
+    padding-bottom: 5px;
+    margin-bottom: 10px;
+  }
+  .label-body { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+  .label-qr { flex: 0 0 auto; }
+  .label-fields { width: 100%; }
+  .lf-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 9px;
+    margin-bottom: 3px;
+    line-height: 1.3;
+    border-bottom: 1px dotted var(--line);
+    padding-bottom: 2px;
+  }
+  .lf-row b { font-size: 9.5px; color: var(--ink); word-break: break-word; text-align: right; font-weight: 600; }
+  .lf-label { color: var(--ink-soft); font-size: 9px; text-transform: uppercase; letter-spacing: 0.3px; flex-shrink: 0; }
+  .label-footer {
+    margin-top: 10px;
+    padding-top: 6px;
+    border-top: 1px solid var(--line);
+    font-size: 9px;
+    font-family: var(--mono);
+    color: var(--ink-soft);
+    text-align: center;
+  }
+
+  .stage-actions { margin-top: 20px; display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+  .stage-actions button {
+    padding: 9px 16px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    border: 1px solid var(--line);
+    background: #fff;
+    color: var(--ink);
+  }
+  .stage-actions button.primary { background: var(--accent); color: #fff; border: none; }
+  .status-pill {
+    display: inline-block;
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 20px;
+    margin-top: 10px;
+  }
+  .status-pill.created { background: #eaf4f1; color: var(--accent); }
+  .status-pill.updated { background: #fff4e0; color: #a1650b; }
+  .status-pill.unchanged { background: #eef0f3; color: var(--ink-soft); }
+  .status-pill.recalled { background: #eef0f3; color: var(--ink-soft); }
+
+  @media print {
+    header, .panel, .stage-actions, .stage-empty, .config-toggle, .status-pill { display: none !important; }
+    .stage { padding: 0; }
+    .layout { display: block; }
+    .label { display: block !important; border: 1.5px solid #000; }
+  }
+</style>
+</head>
+<body>
+
+<div id="authGate" style="max-width:380px;margin:80px auto;padding:0 16px;">
+  <div style="text-align:center;margin-bottom:22px;">
+    <img src="data:image/png;base64,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" alt="MRL Cybertec" style="width:48px;height:48px;object-fit:contain;margin:0 auto 10px;display:block;" />
+    <div style="font-weight:700;font-size:16px;">Machine Label Generator</div>
+    <div style="font-size:12.5px;color:var(--ink-soft);margin-top:2px;">Sign in with your dispatcher/admin account</div>
+  </div>
+  <div class="field">
+    <label>Email</label>
+    <input id="auth_email" type="email" autocomplete="username" />
+  </div>
+  <div class="field">
+    <label>Password</label>
+    <input id="auth_password" type="password" autocomplete="current-password" />
+  </div>
+  <button class="primary" id="btnLogin" style="width:100%;">Sign in</button>
+  <div class="msg" id="authMsg"></div>
+
+  <div class="config-toggle" id="configToggleAuth" style="text-align:center;">Connection settings</div>
+  <div class="config-box" id="configBoxAuth">
+    <div class="field">
+      <label>Supabase Project URL</label>
+      <input id="cfg_supabaseUrl" type="text" placeholder="https://xxxx.supabase.co" />
+    </div>
+    <div class="field">
+      <label>Supabase Anon Key</label>
+      <input id="cfg_anonKey" type="text" placeholder="eyJ..." />
+    </div>
+    <div class="field">
+      <label>Supabase Functions URL</label>
+      <input id="cfg_fnUrl" type="text" placeholder="https://xxxx.functions.supabase.co" />
+    </div>
+    <div class="field">
+      <label>Intake Form Base URL</label>
+      <input id="cfg_formUrl" type="text" placeholder="https://your-intake-form.example.com/intake" />
+    </div>
+    <button class="secondary" id="btnSaveConfig" style="width:100%;">Save settings</button>
+    <div style="font-size:11px;color:var(--ink-soft);margin-top:8px;">
+      Saved in this browser only. Project URL and anon key are from Supabase dashboard → Settings → API (the anon key is safe to put here — it's the public one). Functions URL is your project's Edge Functions base.
+    </div>
+  </div>
+</div>
+
+<div id="appContent" style="display:none;">
+
+<header>
+  <h1>Machine Label Generator</h1>
+  <p>Registers a machine in the ticketing system and produces a printable QR label.</p>
+  <div style="position:absolute;top:20px;right:28px;display:flex;align-items:center;gap:10px;font-size:12.5px;color:var(--ink-soft);">
+    <span id="whoami"></span>
+    <button class="secondary" id="btnLogout" style="padding:6px 12px;width:auto;">Sign out</button>
+  </div>
+</header>
+
+<div class="layout">
+  <div class="panel">
+    <span class="search-label">Recall a past QR code</span>
+    <div class="search-wrap">
+      <input id="searchInput" type="text" placeholder="Search by customer, serial, brand, or machine… (4+ letters)" autocomplete="off" />
+      <div class="search-results" id="searchResults"></div>
+    </div>
+    <hr class="divider" />
+
+    <div class="field">
+      <label>Customer Name</label>
+      <input id="f_customer" type="text" placeholder="e.g. St. Luke's Medical Center" />
+    </div>
+    <div class="row2">
+      <div class="field">
+        <label>Brand</label>
+        <input id="f_brand" type="text" placeholder="e.g. Sysmex" />
+      </div>
+      <div class="field">
+        <label>Machine</label>
+        <input id="f_model" type="text" placeholder="e.g. XN-1000" />
+      </div>
+    </div>
+    <div class="field">
+      <label>Serial Number</label>
+      <input id="f_serial" type="text" placeholder="e.g. SN-2024-8871" />
+    </div>
+    <div class="row2">
+      <div class="field">
+        <label>Region</label>
+        <select id="f_region">
+          <option value="NCR">NCR</option>
+          <option value="North">North</option>
+          <option value="South">South</option>
+          <option value="Cebu">Cebu</option>
+          <option value="Davao">Davao</option>
+          <option value="NSC">NSC</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Type <span class="optional">(optional)</span></label>
+        <select id="f_type">
+          <option value="">—</option>
+          <option value="parts">Parts</option>
+          <option value="service">Service</option>
+          <option value="parts_and_service">Parts and Service</option>
+          <option value="rtu">RTU</option>
+        </select>
+      </div>
+    </div>
+    <div class="field">
+      <label>Validity <span class="optional">(optional)</span></label>
+      <input id="f_validity" type="date" />
+    </div>
+
+    <button class="primary" id="btnGenerate">Generate label</button>
+    <div class="msg" id="msg"></div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-empty" id="stageEmpty">
+      Fill in the machine details and click <b>Generate label</b>, or search
+      for a machine above to reprint its existing label. The label will
+      appear here, ready to print or save.
+    </div>
+
+    <div class="label" id="label">
+      <div class="label-header">MRL Cybertec — Service Ticketing</div>
+      <div class="label-body">
+        <div class="label-qr" id="qrcode"></div>
+        <div class="label-fields">
+          <div class="lf-row"><span class="lf-label">Customer</span><b id="out_customer"></b></div>
+          <div class="lf-row"><span class="lf-label">Brand</span><b id="out_brand"></b></div>
+          <div class="lf-row"><span class="lf-label">Machine</span><b id="out_model"></b></div>
+          <div class="lf-row"><span class="lf-label">Serial</span><b id="out_serial"></b></div>
+          <div class="lf-row"><span class="lf-label">Type</span><b id="out_type"></b></div>
+          <div class="lf-row"><span class="lf-label">Validity</span><b id="out_validity"></b></div>
+        </div>
+      </div>
+      <div class="label-footer" id="out_code"></div>
+    </div>
+
+    <div id="statusPillWrap" style="text-align:center;"></div>
+
+    <div class="stage-actions" id="stageActions" style="display:none;">
+      <button class="primary" id="btnPrint">Print label</button>
+      <button id="btnSaveImage">Save image</button>
+      <button id="btnAnother">Register another machine</button>
+      <button id="btnRetire" style="color:var(--danger);border-color:var(--danger);">Retire this machine</button>
+    </div>
+  </div>
+</div>
+</div><!-- /appContent -->
+
+<script>
+  const TYPE_LABELS = {
+    parts: "Parts",
+    service: "Service",
+    parts_and_service: "Parts and Service",
+    rtu: "RTU",
+    "": "—",
+  };
+
+  // --- config, persisted in localStorage (local staff tool, not an
+  // in-conversation artifact, so localStorage is fine here) --------------
+  const cfgSupabaseUrl = document.getElementById("cfg_supabaseUrl");
+  const cfgAnonKey = document.getElementById("cfg_anonKey");
+  const cfgFnUrl = document.getElementById("cfg_fnUrl");
+  const cfgFormUrl = document.getElementById("cfg_formUrl");
+  cfgSupabaseUrl.value = localStorage.getItem("mrl_supabase_url") || "";
+  cfgAnonKey.value = localStorage.getItem("mrl_anon_key") || "";
+  cfgFnUrl.value = localStorage.getItem("mrl_fn_url") || "";
+  cfgFormUrl.value = localStorage.getItem("mrl_form_url") || "";
+
+  document.getElementById("configToggleAuth").onclick = () => {
+    document.getElementById("configBoxAuth").classList.toggle("open");
+  };
+  document.getElementById("btnSaveConfig").onclick = () => {
+    localStorage.setItem("mrl_supabase_url", cfgSupabaseUrl.value.trim().replace(/\/$/, ""));
+    localStorage.setItem("mrl_anon_key", cfgAnonKey.value.trim());
+    localStorage.setItem("mrl_fn_url", cfgFnUrl.value.trim().replace(/\/$/, ""));
+    localStorage.setItem("mrl_form_url", cfgFormUrl.value.trim().replace(/\/$/, ""));
+    showAuthMsg("Settings saved. Reloading…", "success");
+    setTimeout(() => window.location.reload(), 700);
+  };
+
+  function showMsg(text, kind) {
+    const el = document.getElementById("msg");
+    el.textContent = text;
+    el.className = "msg " + (kind || "");
+  }
+
+  function showAuthMsg(text, kind) {
+    const el = document.getElementById("authMsg");
+    el.textContent = text;
+    el.className = "msg " + (kind || "");
+  }
+
+  // --- auth ------------------------------------------------------------------
+  let sbClient = null;
+  let currentSession = null;
+
+  function initClient() {
+    const url = localStorage.getItem("mrl_supabase_url");
+    const key = localStorage.getItem("mrl_anon_key");
+    if (!url || !key) return null;
+    return supabase.createClient(url, key);
+  }
+
+  async function checkAccess(userId) {
+    const { data, error } = await sbClient
+      .from("technicians")
+      .select("name, role, active")
+      .eq("id", userId)
+      .maybeSingle();
+    if (error || !data) return { ok: false, reason: "No technician profile found for this account." };
+    if (!data.active) return { ok: false, reason: "This account is inactive." };
+    if (!["dispatcher", "admin"].includes(data.role)) {
+      return { ok: false, reason: "Only dispatchers and admins can use this tool." };
+    }
+    return { ok: true, name: data.name, role: data.role };
+  }
+
+  async function boot() {
+    sbClient = initClient();
+    if (!sbClient) {
+      // No connection settings saved yet — show the config box open by default.
+      document.getElementById("configBoxAuth").classList.add("open");
+      return;
+    }
+
+    const { data } = await sbClient.auth.getSession();
+    if (data.session) {
+      await handleSignedIn(data.session);
+    }
+  }
+
+  async function handleSignedIn(session) {
+    currentSession = session;
+    const access = await checkAccess(session.user.id);
+    if (!access.ok) {
+      showAuthMsg(access.reason, "error");
+      await sbClient.auth.signOut();
+      currentSession = null;
+      return;
+    }
+    document.getElementById("authGate").style.display = "none";
+    document.getElementById("appContent").style.display = "block";
+    document.getElementById("whoami").textContent = `${access.name} (${access.role})`;
+  }
+
+  document.getElementById("btnLogin").onclick = async () => {
+    if (!sbClient) {
+      showAuthMsg("Save your Supabase connection settings first.", "error");
+      document.getElementById("configBoxAuth").classList.add("open");
+      return;
+    }
+    const email = document.getElementById("auth_email").value.trim();
+    const password = document.getElementById("auth_password").value;
+    if (!email || !password) {
+      showAuthMsg("Enter your email and password.", "error");
+      return;
+    }
+    const btn = document.getElementById("btnLogin");
+    btn.disabled = true;
+    btn.textContent = "Signing in…";
+    const { data, error } = await sbClient.auth.signInWithPassword({ email, password });
+    btn.disabled = false;
+    btn.textContent = "Sign in";
+    if (error) {
+      showAuthMsg(error.message, "error");
+      return;
+    }
+    await handleSignedIn(data.session);
+  };
+
+  document.getElementById("btnLogout").onclick = async () => {
+    await sbClient.auth.signOut();
+    window.location.reload();
+  };
+
+  function authHeaders() {
+    return currentSession ? { Authorization: `Bearer ${currentSession.access_token}` } : {};
+  }
+
+  boot();
+
+
+  function fnUrl() { return localStorage.getItem("mrl_fn_url"); }
+
+  // --- recall / search ------------------------------------------------------
+  const searchInput = document.getElementById("searchInput");
+  const searchResults = document.getElementById("searchResults");
+  let searchTimer = null;
+
+  searchInput.addEventListener("input", () => {
+    clearTimeout(searchTimer);
+    const q = searchInput.value.trim();
+    if (q.length < 4) {
+      searchResults.classList.remove("open");
+      return;
+    }
+    searchTimer = setTimeout(() => runSearch(q), 300);
+  });
+
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest(".search-wrap")) searchResults.classList.remove("open");
+  });
+
+  async function runSearch(q) {
+    if (!fnUrl()) return;
+    try {
+      const res = await fetch(fnUrl() + "/search-machines?q=" + encodeURIComponent(q), {
+        headers: { ...authHeaders() },
+      });
+      const data = await res.json();
+      renderSearchResults(data.machines || []);
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  function renderSearchResults(machines) {
+    searchResults.innerHTML = "";
+    if (machines.length === 0) {
+      searchResults.innerHTML = '<div class="search-empty">No matches.</div>';
+      searchResults.classList.add("open");
+      return;
+    }
+    machines.forEach((m) => {
+      const el = document.createElement("div");
+      el.className = "search-result";
+      const retiredTag = m.active === false ? ' <span style="color:var(--danger);font-weight:700;">· RETIRED</span>' : "";
+      el.innerHTML =
+        '<div class="sr-name">' + escapeHtml(m.customer_name) + retiredTag + "</div>" +
+        '<div class="sr-meta">' + escapeHtml(m.brand) + " " + escapeHtml(m.machine_model) +
+        " · SN " + escapeHtml(m.serial_number) + " · " + escapeHtml(m.region) + "</div>";
+      el.onclick = () => loadMachine(m);
+      searchResults.appendChild(el);
+    });
+    searchResults.classList.add("open");
+  }
+
+  function escapeHtml(s) {
+    return String(s || "").replace(/[&<>"']/g, (c) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+    }[c]));
+  }
+
+  let currentMachineId = null;
+
+  function loadMachine(m) {
+    currentMachineId = m.id;
+    document.getElementById("f_customer").value = m.customer_name || "";
+    document.getElementById("f_brand").value = m.brand || "";
+    document.getElementById("f_model").value = m.machine_model || "";
+    document.getElementById("f_serial").value = m.serial_number || "";
+    document.getElementById("f_region").value = m.region || "NCR";
+    document.getElementById("f_type").value = m.contract_type || "";
+    document.getElementById("f_validity").value = m.contract_validity || "";
+    searchResults.classList.remove("open");
+    searchInput.value = "";
+
+    renderLabel({
+      customer_name: m.customer_name,
+      brand: m.brand,
+      machine_model: m.machine_model,
+      serial_number: m.serial_number,
+      contract_type: m.contract_type || "",
+      contract_validity: m.contract_validity,
+    }, m.qr_short_id, "recalled", m.active === false);
+
+    if (m.active === false) {
+      showMsg(
+        "This machine is retired" + (m.retired_reason ? " (" + m.retired_reason + ")" : "") +
+        ". Its QR code no longer works. To re-register this serial under a new customer, click \"Register another machine\" and create a fresh entry.",
+        "error"
+      );
+    } else {
+      showMsg("Loaded existing label. Editing and clicking Generate will update this machine's record.", "success");
+    }
+  }
+
+  // --- generate / upsert ----------------------------------------------------
+  document.getElementById("btnGenerate").onclick = async () => {
+    if (!fnUrl()) {
+      showMsg("Set your Supabase Functions URL under Connection settings first.", "error");
+      document.getElementById("configBox").classList.add("open");
+      return;
+    }
+
+    const payload = {
+      customer_name: document.getElementById("f_customer").value.trim(),
+      brand: document.getElementById("f_brand").value.trim(),
+      machine_model: document.getElementById("f_model").value.trim(),
+      serial_number: document.getElementById("f_serial").value.trim(),
+      region: document.getElementById("f_region").value,
+      contract_type: document.getElementById("f_type").value || null,
+      contract_validity: document.getElementById("f_validity").value || null,
+    };
+
+    if (!payload.customer_name || !payload.brand || !payload.machine_model || !payload.serial_number || !payload.region) {
+      showMsg("Please fill in Customer Name, Brand, Machine, Serial, and Region.", "error");
+      return;
+    }
+
+    const btn = document.getElementById("btnGenerate");
+    btn.disabled = true;
+    btn.textContent = "Saving…";
+    showMsg("", "");
+
+    try {
+      const res = await fetch(fnUrl() + "/create-machine", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        showMsg(data.error || "Could not register machine.", "error");
+        return;
+      }
+
+      currentMachineId = data.machine_id;
+      renderLabel({ ...payload, contract_type: payload.contract_type || "" }, data.qr_short_id, data.status);
+
+      const statusMsg = {
+        created: "New machine registered. Label ready below.",
+        updated: "Existing machine updated (same QR code — no duplicate created).",
+        unchanged: "No changes — reprinting the existing label.",
+      }[data.status] || "Label ready below.";
+      showMsg(statusMsg, "success");
+    } catch (err) {
+      console.error(err);
+      showMsg("Could not reach the server. Check the Functions URL in Connection settings.", "error");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Generate label";
+    }
+  };
+
+  function renderLabel(payload, qrShortId, status, isRetired) {
+    document.getElementById("stageEmpty").style.display = "none";
+    document.getElementById("out_customer").textContent = payload.customer_name;
+    document.getElementById("out_brand").textContent = payload.brand;
+    document.getElementById("out_model").textContent = payload.machine_model;
+    document.getElementById("out_serial").textContent = payload.serial_number;
+    document.getElementById("out_type").textContent = TYPE_LABELS[payload.contract_type || ""];
+    document.getElementById("out_validity").textContent = payload.contract_validity || "—";
+    document.getElementById("out_code").textContent = qrShortId;
+
+    const formUrl = localStorage.getItem("mrl_form_url") || "https://intake.example.com/intake";
+    const target = formUrl + "?qr=" + encodeURIComponent(qrShortId);
+
+    const qrEl = document.getElementById("qrcode");
+    qrEl.innerHTML = "";
+    new QRCode(qrEl, { text: target, width: 168, height: 168, correctLevel: QRCode.CorrectLevel.M });
+
+    document.getElementById("label").classList.add("visible");
+    document.getElementById("stageActions").style.display = "flex";
+
+    document.getElementById("btnRetire").style.display = isRetired ? "none" : "inline-block";
+    document.getElementById("btnGenerate").disabled = !!isRetired;
+
+    const pillWrap = document.getElementById("statusPillWrap");
+    if (isRetired) {
+      pillWrap.innerHTML = '<span class="status-pill" style="background:var(--danger);color:#fff;">RETIRED — this QR is inactive</span>';
+    } else if (status) {
+      pillWrap.innerHTML = '<span class="status-pill ' + status + '">' + status + "</span>";
+    } else {
+      pillWrap.innerHTML = "";
+    }
+  }
+
+  document.getElementById("btnPrint").onclick = () => window.print();
+
+  document.getElementById("btnSaveImage").onclick = async () => {
+    const btn = document.getElementById("btnSaveImage");
+    const original = btn.textContent;
+    btn.textContent = "Saving…";
+    try {
+      const canvas = await html2canvas(document.getElementById("label"), { scale: 3, backgroundColor: "#ffffff" });
+      const link = document.createElement("a");
+      const serial = document.getElementById("out_serial").textContent.replace(/[^a-zA-Z0-9-]/g, "_");
+      link.download = "label-" + (serial || "machine") + ".png";
+      link.href = canvas.toDataURL("image/png");
+      link.click();
+    } catch (err) {
+      console.error(err);
+      showMsg("Could not save image.", "error");
+    } finally {
+      btn.textContent = original;
+    }
+  };
+
+  document.getElementById("btnAnother").onclick = () => {
+    ["f_customer", "f_brand", "f_model", "f_serial", "f_validity"].forEach(
+      (id) => (document.getElementById(id).value = "")
+    );
+    document.getElementById("f_type").value = "";
+    document.getElementById("label").classList.remove("visible");
+    document.getElementById("stageActions").style.display = "none";
+    document.getElementById("statusPillWrap").innerHTML = "";
+    document.getElementById("stageEmpty").style.display = "block";
+    document.getElementById("btnGenerate").disabled = false;
+    document.getElementById("btnRetire").style.display = "inline-block";
+    currentMachineId = null;
+    showMsg("", "");
+  };
+
+  document.getElementById("btnRetire").onclick = async () => {
+    if (!currentMachineId) {
+      showMsg("No machine loaded to retire.", "error");
+      return;
+    }
+    const reason = prompt(
+      "Why is this machine being retired? (e.g. \"Moved to St. Luke's QC — re-registering under new customer\")"
+    );
+    if (!reason || reason.trim().length < 3) return; // cancelled or too short
+
+    if (!confirm("This QR code will stop working immediately and can't be un-retired from here. Continue?")) return;
+
+    const btn = document.getElementById("btnRetire");
+    btn.disabled = true;
+    btn.textContent = "Retiring…";
+
+    try {
+      const res = await fetch(fnUrl() + "/retire-machine", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ machine_id: currentMachineId, reason: reason.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showMsg(data.error || "Could not retire this machine.", "error");
+        return;
+      }
+      let note = "Machine retired. Its QR code is now inactive.";
+      if (data.active_pm_contracts_still_running?.length) {
+        note += ` Note: ${data.active_pm_contracts_still_running.length} active PM contract(s) on it were NOT auto-terminated — handle those separately in the dashboard.`;
+      }
+      showMsg(note, "success");
+      document.getElementById("btnAnother").click();
+    } catch (err) {
+      console.error(err);
+      showMsg("Could not reach the server.", "error");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Retire this machine";
+    }
+  };
+</script>
+
+</body>
+</html>
